@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>City Traffic Sim | 3D agent-based traffic and signal optimization</title>
+<meta name="description" content="Agent-based 3D city traffic simulation with fixed, adaptive max-pressure and green wave signal control.">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+:root{--p:#0d1320e6;--l:#24304a;--t:#e8eefc;--m:#8796b4;--a:#4cc9f0;--g:#38f28a;--r:#ff5d73;--y:#ffc94d}
+*{box-sizing:border-box}html,body{margin:0;height:100%;overflow:hidden;font-family:Manrope,system-ui,sans-serif;color:var(--t);background:#05080f}
+#c{position:fixed;inset:0}
+.panel{position:fixed;background:var(--p);border:1px solid var(--l);border-radius:18px;padding:16px;backdrop-filter:blur(12px);box-shadow:0 20px 60px #0008}
+#ctl{left:18px;top:18px;width:300px;max-height:calc(100% - 36px);overflow:auto}
+#kpi{right:18px;top:18px;width:320px}
+h1{font-size:19px;margin:0 0 4px;font-weight:800}h1 span{color:var(--a)}.sub{color:var(--m);font-size:12px;margin:0 0 12px}
+h3{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--m);margin:16px 0 8px}
+.seg{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+button{font:inherit;font-size:13px;cursor:pointer;border:1px solid var(--l);background:#151d30;color:var(--t);padding:8px;border-radius:10px}
+button.on{background:#14324a;border-color:var(--a);color:#fff}button:hover{border-color:var(--a)}
+label{display:flex;justify-content:space-between;font-size:12.5px;color:var(--m);margin:10px 0 3px}input[type=range]{width:100%;accent-color:var(--a)}
+.k{display:grid;grid-template-columns:1fr 1fr;gap:8px}.k div{background:#121a2b;border:1px solid var(--l);border-radius:12px;padding:10px}
+.k b{display:block;font-size:22px;font-weight:800}.k small{color:var(--m);font-size:11px}
+canvas#chart{width:100%;height:120px;background:#0a101c;border-radius:12px;margin-top:10px}
+.leg{display:flex;gap:12px;font-size:11px;color:var(--m);margin-top:6px}.leg i{display:inline-block;width:10px;height:3px;margin-right:4px;vertical-align:middle}
+.row{display:flex;gap:6px;margin-top:8px}.row button{flex:1}
+#tip{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);font-size:12px;color:var(--m);background:var(--p);border:1px solid var(--l);padding:8px 14px;border-radius:99px}
+@media(max-width:800px){#ctl{width:auto;right:10px;left:10px;top:auto;bottom:10px;max-height:42%}#kpi{left:10px;right:10px;width:auto;top:10px;padding:10px}#kpi canvas,#kpi .leg,#tip{display:none}.k b{font-size:16px}.k{grid-template-columns:repeat(4,1fr)}}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="panel" id="ctl">
+  <h1>City <span>Traffic Sim</span></h1><p class="sub">Agent-based traffic with car-following physics and smart signals.</p>
+  <h3>Signal strategy</h3>
+  <div class="seg" id="mode"><button data-v="fixed">Fixed time</button><button data-v="adaptive" class="on">Max pressure</button><button data-v="wave">Green wave</button></div>
+  <label>Cycle length <span id="cycV">40 s</span></label><input type="range" id="cyc" min="16" max="90" value="40">
+  <label>East-west green share <span id="splV">50%</span></label><input type="range" id="spl" min="20" max="80" value="50">
+  <label>Adaptive min green <span id="mgV">7 s</span></label><input type="range" id="mg" min="3" max="20" value="7">
+  <h3>Demand</h3>
+  <label>Arrival rate <span id="dV">22 veh/min</span></label><input type="range" id="dem" min="4" max="90" value="40">
+  <label>East-west bias <span id="bV">50%</span></label><input type="range" id="bias" min="10" max="90" value="50">
+  <label>Speed limit <span id="vV">50 km/h</span></label><input type="range" id="vlim" min="30" max="80" value="50">
+  <label>Turning share <span id="tV">25%</span></label><input type="range" id="turn" min="0" max="60" value="25">
+  <h3>Simulation</h3>
+  <div class="seg" id="spd"><button data-v="1" class="on">1x</button><button data-v="4">4x</button><button data-v="10">10x</button></div>
+  <div class="row"><button id="pause">Pause</button><button id="reset">Reset</button><button id="night">Night</button></div>
+  <div class="row"><button id="bench">Benchmark all 3 strategies</button></div>
+  <p class="sub" id="benchOut" style="margin-top:10px"></p>
+</div>
+<div class="panel" id="kpi">
+  <div class="k">
+    <div><small>Vehicles</small><b id="kN">0</b></div><div><small>Throughput /min</small><b id="kT">0</b></div>
+    <div><small>Avg speed km/h</small><b id="kS">0</b></div><div><small>Avg delay s/veh</small><b id="kD">0</b></div>
+    <div><small>Stopped now</small><b id="kQ">0</b></div><div><small>CO2 idle g/min</small><b id="kC">0</b></div>
+  </div>
+  <canvas id="chart" width="600" height="220"></canvas>
+  <div class="leg"><span><i style="background:#4cc9f0"></i>avg speed</span><span><i style="background:#ff5d73"></i>stopped</span><span><i style="background:#38f28a"></i>throughput</span></div>
+</div>
+<div id="tip">Drag to orbit, scroll to zoom, right drag to pan. Sim time <span id="clock">0:00</span></div>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
+<script type="module">
+import * as THREE from 'three';import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+const $=s=>document.querySelector(s);
+const N=4,SP=110,HALF=(N-1)/2*SP+150,LANE=3.2,MAXC=900;
+const coord=i=>(i-(N-1)/2)*SP;
+const P={mode:'adaptive',cyc:40,spl:.5,mg:7,dem:22,bias:.5,vlim:50/3.6,turn:.25,speed:1,paused:false};
+// --- renderer
+const renderer=new THREE.WebGLRenderer({canvas:$('#c'),antialias:true,preserveDrawingBuffer:true});renderer.setPixelRatio(Math.min(2,devicePixelRatio));renderer.shadowMap.enabled=true;
+const scene=new THREE.Scene();const cam=new THREE.PerspectiveCamera(45,1,1,5000);cam.position.set(240,470,330);
+const ctr=new OrbitControls(cam,renderer.domElement);ctr.enableDamping=true;ctr.maxPolarAngle=1.45;ctr.target.set(0,0,0);
+function resize(){renderer.setSize(innerWidth,innerHeight);cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix()}addEventListener('resize',resize);resize();
+const hemi=new THREE.HemisphereLight(0xbfd8ff,0x223044,1.1);scene.add(hemi);
+const sun=new THREE.DirectionalLight(0xffffff,1.6);sun.position.set(300,500,200);sun.castShadow=true;sun.shadow.mapSize.set(2048,2048);Object.assign(sun.shadow.camera,{left:-500,right:500,top:500,bottom:-500,far:1500});scene.add(sun);
+let night=false;function sky(){scene.background=new THREE.Color(night?0x060912:0x9cc4e8);scene.fog=new THREE.Fog(scene.background,700,1600);hemi.intensity=night?.25:1.1;sun.intensity=night?.15:1.6;winMat.emissiveIntensity=night?1.2:0;wI.visible=night;carMat.emissiveIntensity=night?.35:0}
+const ground=new THREE.Mesh(new THREE.PlaneGeometry(3000,3000),new THREE.MeshStandardMaterial({color:0x2e3d33,roughness:1}));ground.rotation.x=-Math.PI/2;ground.receiveShadow=true;scene.add(ground);
+const roadMat=new THREE.MeshStandardMaterial({color:0x2a2d34,roughness:.9});const lineMat=new THREE.MeshBasicMaterial({color:0xd9d9c0});
+for(let i=0;i<N;i++){const c=coord(i);
+ const a=new THREE.Mesh(new THREE.PlaneGeometry(HALF*2,LANE*4),roadMat);a.rotation.x=-Math.PI/2;a.position.set(0,.05,c);a.receiveShadow=true;scene.add(a);
+ const b=a.clone();b.rotation.z=Math.PI/2;b.position.set(c,.06,0);scene.add(b);
+ for(let s=-HALF;s<HALF;s+=14){const l=new THREE.Mesh(new THREE.PlaneGeometry(6,.35),lineMat);l.rotation.x=-Math.PI/2;l.position.set(s,.08,c);scene.add(l);const l2=l.clone();l2.rotation.z=Math.PI/2;l2.position.set(c,.08,s);scene.add(l2)}}
+// buildings
+const bGeo=new THREE.BoxGeometry(1,1,1);bGeo.translate(0,.5,0);const bMat=new THREE.MeshStandardMaterial({color:0xffffff,roughness:.7,metalness:.1});
+const winMat=new THREE.MeshStandardMaterial({color:0x111111,emissive:0xffd28a,emissiveIntensity:0});
+const blocks=[];for(let i=-1;i<N;i++)for(let j=-1;j<N;j++){const x0=i<0?coord(0)-SP:coord(i),z0=j<0?coord(0)-SP:coord(j);blocks.push([x0+SP/2,z0+SP/2])}
+const bI=new THREE.InstancedMesh(bGeo,bMat,blocks.length*6),wI=new THREE.InstancedMesh(bGeo,winMat,blocks.length*6);bI.castShadow=bI.receiveShadow=true;let bi=0;const m4=new THREE.Matrix4(),col=new THREE.Color();
+const rnd=(a,b)=>a+Math.random()*(b-a);
+for(const [cx,cz] of blocks){const d=Math.hypot(cx,cz);for(let k=0;k<4;k++){const w=rnd(18,28),dd=rnd(18,28),h=Math.max(6,rnd(8,85)*Math.exp(-d/320));const x=cx+(k%2?-24:24),z=cz+(k<2?-24:24);
+ m4.compose(new THREE.Vector3(x,0,z),new THREE.Quaternion(),new THREE.Vector3(w,h,dd));bI.setMatrixAt(bi,m4);bI.setColorAt(bi,col.setHSL(.58+rnd(-.05,.05),.12,rnd(.45,.8)));
+ m4.compose(new THREE.Vector3(x,h*.05,z),new THREE.Quaternion(),new THREE.Vector3(w+.3,h*.85,dd*.4));wI.setMatrixAt(bi,m4);bi++}}
+scene.add(bI,wI);
+// signals
+const sigGeo=new THREE.SphereGeometry(1.6,12,8);const SIG=[];
+const lights=new THREE.InstancedMesh(sigGeo,new THREE.MeshBasicMaterial(),N*N*4);scene.add(lights);
+for(let i=0;i<N;i++)for(let j=0;j<N;j++)SIG.push({x:coord(i),z:coord(j),phase:Math.random()<.5?0:1,state:'G',t:0,offset:0,green:0});
+// cars
+const carGeo=new THREE.BoxGeometry(5.5,2.2,2.6);carGeo.translate(0,1,0);const carMat=new THREE.MeshStandardMaterial({color:0xffffff,roughness:.35,metalness:.4,emissive:0xffffff,emissiveIntensity:0});
+const carI=new THREE.InstancedMesh(carGeo,carMat,MAXC);carI.castShadow=true;carI.instanceMatrix.setUsage(THREE.DynamicDrawUsage);scene.add(carI);
+const PAL=[0xf94144,0xf3722c,0xf9c74f,0x90be6d,0x43aa8b,0x577590,0xeeeeee,0x222222,0x4cc9f0,0xb5179e];
+sky();
+// --- simulation
+let cars=[],simT=0,exited=[],stats,hist=[];
+function resetStats(){stats={exits:0,delaySum:0,tripN:0,idle:0}}resetStats();
+// a car lives on a road: axis 'x' (moves along x, at z=road+side) or 'z'; dir +1/-1; road index r
+function spawn(){
+ const ax=Math.random()<P.bias?'x':'z',dir=Math.random()<.5?1:-1,r=Math.floor(Math.random()*N);
+ const s=-dir*HALF;const lane=cars.filter(c=>c.ax===ax&&c.dir===dir&&c.r===r);
+ if(lane.some(c=>Math.abs(c.s-s)<12))return;
+ cars.push({ax,dir,r,s,v:P.vlim*.8,col:PAL[Math.floor(Math.random()*PAL.length)],t0:simT,delay:0,turned:0,turnAt:Math.random()<P.turn?Math.floor(Math.random()*N):-1,id:Math.random()});
+}
+const lanePos=c=>coord(c.r)+c.dir*LANE*(c.ax==='x'?1:-1);
+function sigGreenFor(sig,ax){const want=ax==='x'?0:1;return sig.phase===want&&sig.state==='G'?'G':(sig.phase===want&&sig.state==='Y'?'Y':'R')}
+function updateSignals(dt){
+ const Y=3,AR=1.5;
+ SIG.forEach((g,idx)=>{g.t+=dt;
+  if(g.state==='Y'){if(g.t>Y){g.state='AR';g.t=0}return}
+  if(g.state==='AR'){if(g.t>AR){g.state='G';g.t=0;g.phase^=1}return}
+  let switchNow=false;
+  if(P.mode==='fixed'||P.mode==='wave'){const eff=P.cyc-2*(Y+AR);const gx=Math.max(4,eff*P.spl),gz=Math.max(4,eff*(1-P.spl));
+   if(P.mode==='wave'){// coordinated: phase determined by global clock with offset so platoons on x-axis hit greens
+     const off=(g.x+HALF)/(P.vlim*.9);const tc=((simT-off)%P.cyc+P.cyc)%P.cyc;const want=tc<gx+Y+AR?0:1;
+     if(g.phase!==want&&g.state==='G'&&g.t>3)switchNow=true}
+   else switchNow=g.t>(g.phase===0?gx:gz)}
+  else{const q=queues(g);const cur=g.phase===0?q.x:q.z,oth=g.phase===0?q.z:q.x;
+   switchNow=g.t>P.mg&&(oth>cur*1.3+1||(cur===0&&oth>0)||g.t>60)}
+  if(switchNow){g.state='Y';g.t=0}
+ });
+}
+function queues(g){let x=0,z=0;for(const c of cars){const lp=lanePos(c);if(c.ax==='x'&&Math.abs(lp-g.z)<6){const d=(g.x-c.s)*c.dir;if(d>0&&d<70)x+=c.v<2?1.5:.4}else if(c.ax==='z'&&Math.abs(lp-g.x)<6){const d=(g.z-c.s)*c.dir;if(d>0&&d<70)z+=c.v<2?1.5:.4}}return{x,z}}
+function step(dt){
+ simT+=dt;
+ if(Math.random()<P.dem/60*dt&&cars.length<MAXC)spawn();
+ updateSignals(dt);
+ const lanes={};for(const c of cars){const k=c.ax+c.dir+c.r;(lanes[k]??=[]).push(c)}
+ for(const k in lanes)lanes[k].sort((a,b)=>(b.s-a.s)*b.dir);
+ const a=2.2,b=3,T=1.2,s0=3,L=4.6;
+ for(const k in lanes){const L_=lanes[k];for(let i=0;i<L_.length;i++){const c=L_[i];const v0=P.vlim;
+  let gap=1e9,dv=0;if(i>0){const ld=L_[i-1];gap=(ld.s-c.s)*c.dir-L;dv=c.v-ld.v}
+  // next intersection along path
+  const cross=c.ax==='x'?'x':'z';
+  for(let j=0;j<N;j++){const pos=coord(j);const dist=(pos-c.s)*c.dir-LANE*2.4;if(dist<-0.5||dist>90)continue;
+   const g=SIG[c.ax==='x'?j*N+c.r:c.r*N+j];const st=sigGreenFor(g,c.ax);
+   if(st==='R'||(st==='Y'&&dist>c.v*c.v/(2*b)+1)){if(dist<gap){gap=dist;dv=c.v}}
+   break}
+  const ss=s0+Math.max(0,c.v*T+c.v*dv/(2*Math.sqrt(a*b)));
+  let acc=a*(1-Math.pow(c.v/v0,4)-Math.pow(ss/Math.max(.1,gap),2));acc=Math.max(-9,acc);
+  c.v=Math.max(0,c.v+acc*dt);c.s+=c.v*c.dir*dt;
+  if(c.v<v0*.5)c.delay+=dt*(1-c.v/v0);if(c.v<.5)stats.idle+=dt;
+  // turning at intersection center
+  if(!c.turned&&c.turnAt>=0&&c.turnAt!==c.r){const d=(coord(c.turnAt)-c.s)*c.dir;if(d<=0&&d>-3){const old=c.r;c.turned=1;c.ax=c.ax==='x'?'z':'x';c.r=c.turnAt;c.dir=Math.random()<.5?1:-1;c.s=coord(old);c.v*=.55}}
+ }}
+ const keep=[];for(const c of cars){if(Math.abs(c.s)>HALF){stats.exits++;stats.delaySum+=c.delay;stats.tripN++;exited.push(simT)}else keep.push(c)}cars=keep;
+ exited=exited.filter(t=>simT-t<60);
+}
+// --- render
+const dummy=new THREE.Object3D();
+function draw(){
+ cars.forEach((c,i)=>{const lp=lanePos(c);if(c.ax==='x'){dummy.position.set(c.s,0,lp);dummy.rotation.y=c.dir>0?0:Math.PI}else{dummy.position.set(lp,0,c.s);dummy.rotation.y=c.dir>0?-Math.PI/2:Math.PI/2}dummy.updateMatrix();carI.setMatrixAt(i,dummy.matrix);carI.setColorAt(i,col.setHex(c.col))});
+ carI.count=cars.length;carI.instanceMatrix.needsUpdate=true;if(carI.instanceColor)carI.instanceColor.needsUpdate=true;
+ let li=0;SIG.forEach(g=>{[['x',-1],['x',1],['z',-1],['z',1]].forEach(([ax,d])=>{const st=sigGreenFor(g,ax);const o=LANE*3.2;dummy.position.set(g.x+(ax==='x'?-d*o:(d*o)),7,g.z+(ax==='z'?-d*o:-d*o));dummy.rotation.set(0,0,0);dummy.updateMatrix();lights.setMatrixAt(li,dummy.matrix);lights.setColorAt(li,col.setHex(st==='G'?0x38f28a:st==='Y'?0xffc94d:0xff3b5c));li++})});
+ lights.instanceMatrix.needsUpdate=true;lights.instanceColor.needsUpdate=true;
+}
+function kpis(){const n=cars.length;const avg=n?cars.reduce((s,c)=>s+c.v,0)/n*3.6:0;const stopped=cars.filter(c=>c.v<.5).length;const thr=exited.length;const dly=stats.tripN?stats.delaySum/stats.tripN:0;
+ $('#kN').textContent=n;$('#kT').textContent=thr;$('#kS').textContent=avg.toFixed(1);$('#kD').textContent=dly.toFixed(1);$('#kQ').textContent=stopped;$('#kC').textContent=Math.round(stopped*0.6*60/1);
+ $('#clock').textContent=Math.floor(simT/60)+':'+String(Math.floor(simT%60)).padStart(2,'0');return{avg,stopped,thr,dly}}
+const ch=$('#chart'),cg=ch.getContext('2d');
+function chart(){const W=ch.width,H=ch.height;cg.clearRect(0,0,W,H);cg.strokeStyle='#1c2740';for(let y=0;y<H;y+=44){cg.beginPath();cg.moveTo(0,y);cg.lineTo(W,y);cg.stroke()}
+ [['avg',80,'#4cc9f0'],['stopped',Math.max(20,...hist.map(h=>h.stopped)),'#ff5d73'],['thr',Math.max(20,...hist.map(h=>h.thr)),'#38f28a']].forEach(([k,mx,c])=>{cg.beginPath();cg.strokeStyle=c;cg.lineWidth=2.5;hist.forEach((h,i)=>{const x=i/(119)*W,y=H-h[k]/mx*(H-10)-5;i?cg.lineTo(x,y):cg.moveTo(x,y)});cg.stroke()})}
+let last=performance.now(),acc=0,kt=0;
+function loop(now){requestAnimationFrame(loop);const dt=Math.min(.1,(now-last)/1000);last=now;
+ if(!P.paused){const sub=P.speed*3;for(let i=0;i<sub;i++)step(dt*P.speed/sub)}
+ draw();ctr.update();renderer.render(scene,cam);
+ kt+=dt;if(kt>.5){kt=0;const k=kpis();hist.push(k);if(hist.length>120)hist.shift();chart()}}
+requestAnimationFrame(loop);
+// --- UI
+const seg=(id,f)=>$(id).addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;$(id).querySelectorAll('button').forEach(x=>x.classList.remove('on'));b.classList.add('on');f(b.dataset.v)});
+seg('#mode',v=>P.mode=v);seg('#spd',v=>P.speed=+v);
+const rng=(id,lab,f)=>{const e=$(id);const u=()=>$(lab).textContent=f(+e.value);e.oninput=u;u()};
+rng('#cyc','#cycV',v=>(P.cyc=v)+' s');rng('#spl','#splV',v=>(P.spl=v/100,v+'%'));rng('#mg','#mgV',v=>(P.mg=v)+' s');rng('#dem','#dV',v=>(P.dem=v)+' veh/min');rng('#bias','#bV',v=>(P.bias=v/100,v+'%'));rng('#vlim','#vV',v=>(P.vlim=v/3.6,v+' km/h'));rng('#turn','#tV',v=>(P.turn=v/100,v+'%'));
+$('#pause').onclick=e=>{P.paused=!P.paused;e.target.textContent=P.paused?'Resume':'Pause'};
+function reset(){cars=[];simT=0;exited=[];hist=[];resetStats();SIG.forEach(g=>{g.t=0;g.state='G'})}
+$('#reset').onclick=reset;$('#night').onclick=e=>{night=!night;e.target.textContent=night?'Day':'Night';sky()};
+$('#bench').onclick=async()=>{const out=$('#benchOut');out.textContent='Running 10 simulated minutes per strategy...';await new Promise(r=>setTimeout(r,30));const save={mode:P.mode};const res=[];
+ for(const m of ['fixed','adaptive','wave']){P.mode=m;reset();Math.random();for(let i=0;i<600*10;i++)step(.1);res.push([m,stats.tripN?stats.delaySum/stats.tripN:0,stats.exits/10])}
+ P.mode=save.mode;reset();const best=res.reduce((a,b)=>a[1]<b[1]?a:b);out.innerHTML=res.map(r=>`<b>${{fixed:'Fixed',adaptive:'Max pressure',wave:'Green wave'}[r[0]]}</b>: ${r[1].toFixed(1)} s delay, ${r[2].toFixed(1)} veh/min`).join('<br>')+`<br>Best for this demand: <b>${{fixed:'Fixed',adaptive:'Max pressure',wave:'Green wave'}[best[0]]}</b>`};
+for(let i=0;i<900;i++)step(.1);
+</script>
+</body>
+</html>
